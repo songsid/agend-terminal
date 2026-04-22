@@ -350,7 +350,10 @@ impl EventHandler for Handler {
 
         let (instance_name, home, submit_key, registry) = {
             let mut s = lock_state(&self.state);
-            let name = resolve_channel_to_instance(&mut s, channel_id);
+            let name = match resolve_channel_to_instance(&mut s, channel_id) {
+                Some(n) => n,
+                None => return, // not an AgEnD channel, ignore
+            };
             let sk = s
                 .submit_keys
                 .get(&name)
@@ -423,9 +426,9 @@ impl EventHandler for Handler {
     }
 }
 
-fn resolve_channel_to_instance(state: &mut DiscordState, channel_id: u64) -> String {
+fn resolve_channel_to_instance(state: &mut DiscordState, channel_id: u64) -> Option<String> {
     if let Some(name) = state.channel_to_instance.get(&channel_id).cloned() {
-        return name;
+        return Some(name);
     }
     // Reload from fleet.yaml
     if let Ok(config) = crate::fleet::FleetConfig::load(&state.home.join("fleet.yaml")) {
@@ -435,13 +438,13 @@ fn resolve_channel_to_instance(state: &mut DiscordState, channel_id: u64) -> Str
                     if cid == channel_id {
                         state.channel_to_instance.insert(cid, inst_name.clone());
                         state.instance_to_channel.insert(inst_name.clone(), cid);
-                        return inst_name.clone();
+                        return Some(inst_name.clone());
                     }
                 }
             }
         }
     }
-    "general".to_string()
+    None
 }
 
 fn agent_wants_raw_keystrokes(registry: Option<&AgentRegistry>, instance_name: &str) -> bool {
@@ -659,25 +662,14 @@ pub fn try_discord_edit(
 }
 
 /// Download a Discord attachment by URL.
-pub fn try_discord_download(instance_name: &str, url: &str) -> anyhow::Result<String> {
+pub fn try_discord_download(instance_name: &str, file_id: &str) -> anyhow::Result<String> {
     let home = crate::home_dir();
-    let download_dir = home.join("downloads").join(instance_name);
-    std::fs::create_dir_all(&download_dir)?;
-    let filename = url
-        .rsplit('/')
-        .next()
-        .and_then(|s| s.split('?').next())
-        .unwrap_or("attachment");
-    let dest = download_dir.join(filename);
-
-    discord_runtime().block_on(async {
-        let resp = reqwest::get(url).await?;
-        let bytes = resp.bytes().await?;
-        tokio::fs::write(&dest, &bytes).await?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    Ok(dest.display().to_string())
+    let path = home.join("downloads").join(instance_name).join(file_id);
+    if path.exists() {
+        Ok(path.display().to_string())
+    } else {
+        anyhow::bail!("attachment not found: {}", path.display())
+    }
 }
 
 /// Create a text channel for a new instance under the AgEnD category.

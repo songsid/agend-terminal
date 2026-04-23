@@ -364,6 +364,25 @@ fn handle_message(state: &Arc<Mutex<TelegramState>>, msg: &Message) {
 
     tracing::info!(from = username, to = %instance_name, %text, "inbound message");
 
+    // Save inbound message ID for status reactions and react 👀
+    let inbound_msg_id = msg.id.0.to_string();
+    crate::agent_ops::save_metadata(
+        &home,
+        &instance_name,
+        "last_inbound_message_id",
+        serde_json::json!(inbound_msg_id),
+    );
+    {
+        let name2 = instance_name.clone();
+        let mid = inbound_msg_id.clone();
+        std::thread::Builder::new()
+            .name("tg_react_eyes".into())
+            .spawn(move || {
+                let _ = crate::channel::telegram::try_telegram_react(&name2, "👀", Some(&mid));
+            })
+            .ok();
+    }
+
     // Route based on agent state: when blocked on an interactive prompt
     // (AwaitingOperator startup stall, or a pattern-matched InteractivePrompt
     // like codex's update menu), the operator's reply must reach the PTY as

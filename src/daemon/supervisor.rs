@@ -111,6 +111,10 @@ fn tick(home: &std::path::Path, registry: &AgentRegistry) {
                     "recovered from blocked state — notifying telegram"
                 );
                 Some(NoticeAction::Recovered)
+            } else if core.state.take_working_notice() {
+                Some(NoticeAction::Working)
+            } else if core.state.take_done_notice() {
+                Some(NoticeAction::Done)
             } else {
                 None
             }
@@ -125,6 +129,12 @@ fn tick(home: &std::path::Path, registry: &AgentRegistry) {
                 let msg = format_recovery_notice(&name);
                 notify_telegram_silent(home, &name, &msg);
             }
+            Some(NoticeAction::Working) => {
+                crate::agent_ops::react_to_last_inbound(home, &name, "⏳");
+            }
+            Some(NoticeAction::Done) => {
+                crate::agent_ops::react_to_last_inbound(home, &name, "✅");
+            }
             None => {}
         }
     }
@@ -138,6 +148,8 @@ enum NoticeAction {
         silent_secs: Option<u64>,
     },
     Recovered,
+    Working,
+    Done,
 }
 
 /// Build the Telegram notice shown when an agent is blocked on an interactive

@@ -7,6 +7,7 @@ use std::path::Path;
 /// Which channel the user selected during quickstart.
 enum ChannelChoice {
     Telegram { token: String, group_id: Option<i64> },
+    #[cfg(feature = "discord")]
     Discord { token: String, guild_id: String },
     Skip,
 }
@@ -49,6 +50,7 @@ pub fn run(home: &Path) -> anyhow::Result<()> {
         ChannelChoice::Telegram { token, .. } if !token.is_empty() => {
             save_env_var(home, "AGEND_BOT_TOKEN", token)?;
         }
+        #[cfg(feature = "discord")]
         ChannelChoice::Discord { token, .. } if !token.is_empty() => {
             save_env_var(home, "AGEND_DISCORD_TOKEN", token)?;
         }
@@ -70,25 +72,28 @@ fn detect_existing_or_prompt(home: &Path) -> anyhow::Result<ChannelChoice> {
         .and_then(|c| serde_yaml::from_str::<serde_yaml::Value>(&c).ok());
 
     // Check existing Discord config
-    let existing_dc_token = env_content
-        .lines()
-        .find(|l| l.starts_with("AGEND_DISCORD_TOKEN="))
-        .map(|l| l.trim_start_matches("AGEND_DISCORD_TOKEN=").trim().to_string())
-        .filter(|t| !t.is_empty());
-    let existing_dc_guild = fleet_yaml
-        .as_ref()
-        .and_then(|c| c["channel"]["guild_id"].as_str().map(String::from));
+    #[cfg(feature = "discord")]
+    {
+        let existing_dc_token = env_content
+            .lines()
+            .find(|l| l.starts_with("AGEND_DISCORD_TOKEN="))
+            .map(|l| l.trim_start_matches("AGEND_DISCORD_TOKEN=").trim().to_string())
+            .filter(|t| !t.is_empty());
+        let existing_dc_guild = fleet_yaml
+            .as_ref()
+            .and_then(|c| c["channel"]["guild_id"].as_str().map(String::from));
 
-    if let (Some(tok), Some(gid)) = (&existing_dc_token, &existing_dc_guild) {
-        println!("  ── Discord ──\n");
-        println!("  ✓ Token: {}\n  ✓ Guild: {gid}", mask_token(tok));
-        let answer = prompt("\n  Use existing Discord config? (Y/n): ")?;
-        if !answer.trim().eq_ignore_ascii_case("n") {
-            println!();
-            return Ok(ChannelChoice::Discord {
-                token: tok.clone(),
-                guild_id: gid.clone(),
-            });
+        if let (Some(tok), Some(gid)) = (&existing_dc_token, &existing_dc_guild) {
+            println!("  ── Discord ──\n");
+            println!("  ✓ Token: {}\n  ✓ Guild: {gid}", mask_token(&tok));
+            let answer = prompt("\n  Use existing Discord config? (Y/n): ")?;
+            if !answer.trim().eq_ignore_ascii_case("n") {
+                println!();
+                return Ok(ChannelChoice::Discord {
+                    token: tok.clone(),
+                    guild_id: gid.clone(),
+                });
+            }
         }
     }
 
@@ -149,10 +154,12 @@ fn detect_existing_or_prompt(home: &Path) -> anyhow::Result<ChannelChoice> {
 fn channel_selection_prompt() -> anyhow::Result<ChannelChoice> {
     println!("  Select channel:");
     println!("    1. Telegram");
+    #[cfg(feature = "discord")]
     println!("    2. Discord");
     println!("    3. Skip\n");
     let choice = prompt("  Choice [1-3]: ")?;
     match choice.trim() {
+        #[cfg(feature = "discord")]
         "2" => discord_setup(),
         "3" => {
             println!("  Skipping channel. Configure later in fleet.yaml.\n");
@@ -213,6 +220,7 @@ fn telegram_setup() -> anyhow::Result<ChannelChoice> {
 }
 
 /// Discord setup flow — Developer Portal → token → guild verification.
+#[cfg(feature = "discord")]
 fn discord_setup() -> anyhow::Result<ChannelChoice> {
     println!("  ── Discord Setup ──\n");
     println!("  1. Go to https://discord.com/developers/applications");
@@ -300,6 +308,7 @@ fn verify_telegram_bot(token: &str) -> anyhow::Result<String> {
     })
 }
 
+#[cfg(feature = "discord")]
 fn verify_discord_bot(token: &str) -> anyhow::Result<String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -327,6 +336,7 @@ fn verify_discord_bot(token: &str) -> anyhow::Result<String> {
     })
 }
 
+#[cfg(feature = "discord")]
 fn verify_discord_guild(token: &str, guild_id: &str) -> anyhow::Result<String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -415,6 +425,7 @@ channel:
         ChannelChoice::Telegram { group_id: None, .. } => {
             "\n# channel:\n#   type: telegram\n#   bot_token_env: AGEND_BOT_TOKEN\n#   group_id: YOUR_GROUP_ID\n".to_string()
         }
+        #[cfg(feature = "discord")]
         ChannelChoice::Discord { guild_id, .. } if !guild_id.is_empty() => format!(
             r#"
 channel:
@@ -423,6 +434,7 @@ channel:
   guild_id: "{guild_id}"
 "#
         ),
+        #[cfg(feature = "discord")]
         ChannelChoice::Discord { .. } => {
             "\n# channel:\n#   type: discord\n#   bot_token_env: AGEND_DISCORD_TOKEN\n#   guild_id: \"YOUR_GUILD_ID\"\n".to_string()
         }
@@ -522,6 +534,7 @@ fn check_compatibility(yaml_content: &str, new_backend: &Backend, channel: &Chan
         let existing_type = config["channel"]["type"].as_str().unwrap_or("");
         let new_type = match channel {
             ChannelChoice::Telegram { .. } => "telegram",
+            #[cfg(feature = "discord")]
             ChannelChoice::Discord { .. } => "discord",
             ChannelChoice::Skip => "",
         };
@@ -539,6 +552,7 @@ fn check_compatibility(yaml_content: &str, new_backend: &Backend, channel: &Chan
                     println!("  ⚠ Existing group_id: {existing_gid}, new: {new_gid}");
                 }
             }
+            #[cfg(feature = "discord")]
             ChannelChoice::Discord { guild_id, .. } if !guild_id.is_empty() => {
                 let existing = config["channel"]["guild_id"].as_str().unwrap_or("");
                 if !existing.is_empty() && existing != guild_id {

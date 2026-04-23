@@ -67,6 +67,21 @@ pub enum ChannelConfig {
         #[serde(default)]
         fleet_binding: Option<FleetBindingConfig>,
     },
+    #[cfg(feature = "discord")]
+    #[serde(rename = "discord")]
+    Discord {
+        bot_token_env: String,
+        guild_id: String,
+        #[serde(default = "default_category_name")]
+        category_name: String,
+        #[serde(default)]
+        user_allowlist: Option<Vec<String>>,
+    },
+}
+
+#[cfg(feature = "discord")]
+fn default_category_name() -> String {
+    "AgEnD".to_string()
 }
 
 /// Where fleet activity gets mirrored on a channel. Accepts two YAML
@@ -137,6 +152,9 @@ pub struct InstanceConfig {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     pub topic_id: Option<i32>,
+    /// Discord channel ID (snowflake string).
+    #[cfg(feature = "discord")]
+    pub channel_id: Option<String>,
     /// Custom git branch name for worktree. TS version uses "worktree_source".
     #[serde(alias = "worktree_source")]
     pub git_branch: Option<String>,

@@ -31,6 +31,7 @@ unwrap_used = "deny"
 [features]
 default = []
 tray = ["dep:tray-icon", "dep:tao", "dep:toml"]
+discord = ["dep:serenity"]
 
 [profile.release]
 strip = true
@@ -87,6 +88,7 @@ iana-time-zone = "0.1.65"
 tray-icon = { version = "0.22", optional = true }
 tao = { version = "0.35", optional = true }
 toml = { version = "0.8", optional = true }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -25,6 +25,8 @@ pub(super) fn telegram_status_from_config(
                 render::TelegramStatus::NoToken
             }
         }
+        #[cfg(feature = "discord")]
+        Some(crate::fleet::ChannelConfig::Discord { .. }) => render::TelegramStatus::NotConfigured,
         None => render::TelegramStatus::NotConfigured,
     }
 }

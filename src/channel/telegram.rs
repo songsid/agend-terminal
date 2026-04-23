@@ -642,13 +642,16 @@ pub fn init_from_config(
     home: &Path,
     submit_keys: HashMap<String, String>,
 ) -> Option<Arc<Mutex<TelegramState>>> {
-    let ChannelConfig::Telegram {
+    let Some(ChannelConfig::Telegram {
         bot_token_env,
         group_id,
         user_allowlist,
         fleet_binding,
         ..
-    } = config.channel.as_ref()?;
+    }) = config.channel.as_ref()
+    else {
+        return None;
+    };
     let token = match std::env::var(bot_token_env) {
         Ok(t) => t,
         Err(_) => {
@@ -865,6 +868,10 @@ fn resolve_channel() -> anyhow::Result<(TelegramCreds, crate::fleet::FleetConfig
             ))
         }
         None => anyhow::bail!("No Telegram channel configured"),
+        #[cfg(feature = "discord")]
+        Some(crate::fleet::ChannelConfig::Discord { .. }) => {
+            anyhow::bail!("No Telegram channel configured (Discord active)")
+        }
     }
 }
 
@@ -1184,6 +1191,8 @@ fn notify_telegram_inner(
             Err(_) => return,
         },
         None => return,
+        #[cfg(feature = "discord")]
+        Some(crate::fleet::ChannelConfig::Discord { .. }) => return,
     };
 
     let text = text.to_string();

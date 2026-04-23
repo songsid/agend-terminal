@@ -375,20 +375,13 @@ fn handle_message(state: &Arc<Mutex<TelegramState>>, msg: &Message) {
 
     tracing::info!(from = username, to = %instance_name, %text, "inbound message");
 
-    // Download attachment if present
+    // If attachment present, append file_id immediately (non-blocking).
+    // Download runs in a detached thread; metadata updated on completion.
     let text = if let Some(ref fid) = attachment {
         let download_dir = home.join("downloads").join(&instance_name);
         std::fs::create_dir_all(&download_dir).ok();
-        match try_download_attachment_to(fid, &download_dir) {
-            Ok(path) => {
-                tracing::info!(to = %instance_name, %path, "downloaded attachment");
-                format!("{text}\n[attachment: {fid} -> {path}]")
-            }
-            Err(e) => {
-                tracing::warn!(to = %instance_name, error = %e, "attachment download failed");
-                format!("{text}\n[attachment: {fid} (download failed)]")
-            }
-        }
+        spawn_attachment_download(fid.clone(), download_dir, instance_name.clone(), home.clone());
+        format!("{text}\n[attachment: {fid}]")
     } else {
         text
     };
@@ -1152,34 +1145,49 @@ pub fn delete_topic(home: &std::path::Path, topic_id: i32) {
     tracing::info!(topic_id, "deleted topic");
 }
 
-/// Download an attachment by file_id to a specific directory. Used by inbound handler.
-/// Spawns a dedicated thread to avoid nesting inside the polling thread's tokio runtime.
-fn try_download_attachment_to(file_id: &str, dest_dir: &std::path::Path) -> anyhow::Result<String> {
-    let ch = resolve_channel_only()?;
-    let fid = file_id.to_string();
-    let dir = dest_dir.to_path_buf();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| anyhow::anyhow!("runtime: {e}"))?;
-            rt.block_on(async {
+/// Download an attachment in a detached thread. Updates metadata on completion.
+/// Does NOT block the caller — the polling thread continues immediately.
+fn spawn_attachment_download(
+    file_id: String,
+    dest_dir: std::path::PathBuf,
+    instance_name: String,
+    home: std::path::PathBuf,
+) {
+    std::thread::Builder::new()
+        .name("tg_download".into())
+        .spawn(move || {
+            let ch = match resolve_channel_only() {
+                Ok(c) => c,
+                Err(e) => { tracing::warn!(error = %e, "attachment download: no channel"); return; }
+            };
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(r) => r,
+                Err(e) => { tracing::warn!(error = %e, "attachment download: runtime failed"); return; }
+            };
+            match rt.block_on(async {
                 let bot = teloxide::Bot::new(&ch.token);
-                let file = bot.get_file(&fid).await?;
+                let file = bot.get_file(&file_id).await?;
                 let filename = std::path::Path::new(&file.path)
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("attachment");
-                let dest = dir.join(filename);
+                let dest = dest_dir.join(filename);
                 let mut dst = tokio::fs::File::create(&dest).await?;
                 bot.download_file(&file.path, &mut dst).await?;
                 Ok::<String, anyhow::Error>(dest.display().to_string())
-            })
+            }) {
+                Ok(path) => {
+                    tracing::info!(instance = %instance_name, %path, "downloaded attachment");
+                    crate::agent_ops::save_metadata(
+                        &home, &instance_name,
+                        &format!("attachment_{file_id}"),
+                        serde_json::json!(path),
+                    );
+                }
+                Err(e) => tracing::warn!(instance = %instance_name, error = %e, "attachment download failed"),
+            }
         })
-        .join()
-        .map_err(|_| anyhow::anyhow!("download thread panicked"))?
-    })
+        .ok();
 }
 
 /// Download an attachment by file_id.

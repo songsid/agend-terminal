@@ -444,6 +444,36 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    // --- save_metadata for last_inbound_message_id ---
+
+    #[test]
+    fn metadata_save_last_inbound_message_id() {
+        let home = tmp_home("meta_inbound");
+        save_metadata(&home, "a", "last_inbound_message_id", json!("12345"));
+        let c = std::fs::read_to_string(home.join("metadata/a.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&c).unwrap();
+        assert_eq!(v["last_inbound_message_id"], "12345");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// react_to_last_inbound silently returns when no metadata file exists.
+    #[test]
+    fn react_to_last_inbound_no_metadata_no_panic() {
+        let home = tmp_home("react_no_meta");
+        // No metadata file — should return silently, not panic.
+        react_to_last_inbound(&home, "nonexistent", "⏳");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// react_to_last_inbound silently returns when message_id is missing.
+    #[test]
+    fn react_to_last_inbound_no_msg_id_no_panic() {
+        let home = tmp_home("react_no_msgid");
+        save_metadata(&home, "a", "some_other_key", json!("val"));
+        react_to_last_inbound(&home, "a", "✅");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
     // --- NEW: drift guard — assert canonical 19-entry set (at-dev-3 gate C).
     //
     // Creates every one of the 19 entries in a user-provided working dir

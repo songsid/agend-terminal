@@ -1508,6 +1508,86 @@ mod tests {
         assert!(!st.take_recovery_notice());
     }
 
+    // ── Working / Done notice (feat/task-status-reactions-v2) ─────────
+
+    #[test]
+    fn working_notice_armed_on_idle_to_thinking() {
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Idle;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Thinking);
+        assert!(st.take_working_notice());
+    }
+
+    #[test]
+    fn working_notice_one_shot() {
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Ready;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Thinking);
+        assert!(st.take_working_notice(), "first take must fire");
+        assert!(!st.take_working_notice(), "second take must be empty");
+    }
+
+    #[test]
+    fn done_notice_armed_on_thinking_to_idle() {
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Thinking;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Idle);
+        assert!(st.take_done_notice());
+    }
+
+    #[test]
+    fn done_notice_one_shot() {
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::ToolUse;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Ready);
+        assert!(st.take_done_notice(), "first take must fire");
+        assert!(!st.take_done_notice(), "second take must be empty");
+    }
+
+    #[test]
+    fn working_notice_not_armed_on_thinking_to_tooluse() {
+        // Thinking → ToolUse is active-to-active, not passive-to-active.
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Thinking;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::ToolUse);
+        assert!(!st.take_working_notice());
+    }
+
+    #[test]
+    fn done_notice_not_armed_on_idle_to_ready() {
+        // Idle → Ready is passive-to-passive, not active-to-passive.
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Idle;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Ready);
+        assert!(!st.take_done_notice());
+    }
+
+    #[test]
+    fn working_notice_fresh_tracker_not_armed() {
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        assert!(!st.take_working_notice());
+        assert!(!st.take_done_notice());
+    }
+
+    #[test]
+    fn working_done_full_cycle() {
+        // Idle → Thinking (arms working) → Idle (arms done)
+        let mut st = StateTracker::new(Some(&Backend::ClaudeCode));
+        st.current = AgentState::Idle;
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Thinking);
+        assert!(st.take_working_notice());
+        st.since = Instant::now() - Duration::from_secs(10);
+        st.transition(AgentState::Idle);
+        assert!(st.take_done_notice());
+    }
+
     #[test]
     fn gemini_tooluse_banner_match() {
         // Gemini 0.38.2 renders completed tool calls as `✓ <ToolName>

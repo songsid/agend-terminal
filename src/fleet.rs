@@ -737,7 +737,9 @@ instances:
                 assert_eq!(group_id, -100123456);
                 assert_eq!(mode, "topic");
             }
-            None => panic!("channel should be Some"),
+            _ => panic!("expected Telegram channel"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
 
         fs::remove_dir_all(&dir).ok();
@@ -772,7 +774,9 @@ instances: {}
                 assert_eq!(bot_token_env, "MY_BOT_TOKEN");
                 assert_eq!(group_id, -100999);
             }
-            None => panic!("plural channels: should populate singular channel field"),
+            _ => panic!("expected Telegram channel"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         // Plural is still preserved on the struct for later consumers.
         assert!(config.channels.is_some());
@@ -817,7 +821,9 @@ instances: {}
                     "must pick first entry by sorted name"
                 );
             }
-            None => panic!("channel should be populated"),
+            _ => panic!("expected Telegram channel"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         fs::remove_dir_all(&dir).ok();
     }
@@ -849,7 +855,9 @@ instances: {}
             Some(ChannelConfig::Telegram {
                 ref bot_token_env, ..
             }) => assert_eq!(bot_token_env, "SINGULAR_TOKEN"),
-            None => panic!("singular channel field must be preserved"),
+            _ => panic!("expected Telegram channel"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         fs::remove_dir_all(&dir).ok();
     }
@@ -891,7 +899,9 @@ instances: {}
             Some(ChannelConfig::Telegram { ref mode, .. }) => {
                 assert_eq!(mode, "topic", "default mode should be 'topic'");
             }
-            None => panic!("channel should be Some"),
+            _ => panic!("expected Telegram channel"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
 
         fs::remove_dir_all(&dir).ok();

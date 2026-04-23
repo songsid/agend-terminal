@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 pub enum NotifySource<'a> {
     /// Message from a Telegram user (e.g., "chiacheng").
     Telegram(&'a str),
+    /// Message from a Discord user.
+    #[cfg(feature = "discord")]
+    Discord(&'a str),
     /// Message from another agent instance (e.g., "dev").
     Agent(&'a str),
     /// System message (e.g., "replace", "ci").
@@ -25,6 +28,8 @@ impl fmt::Display for NotifySource<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Telegram(user) => write!(f, "user:{user} via telegram"),
+            #[cfg(feature = "discord")]
+            Self::Discord(user) => write!(f, "user:{user} via discord"),
             Self::Agent(name) => write!(f, "from:{name}"),
             Self::System(label) => write!(f, "system:{label}"),
         }
@@ -35,6 +40,10 @@ impl NotifySource<'_> {
     fn reply_hint(&self) -> Cow<'static, str> {
         match self {
             Self::Telegram(_) => {
+                "\n(Reply using the reply tool — do NOT respond with direct text)".into()
+            }
+            #[cfg(feature = "discord")]
+            Self::Discord(_) => {
                 "\n(Reply using the reply tool — do NOT respond with direct text)".into()
             }
             Self::Agent(sender) => {

@@ -123,13 +123,20 @@ pub(crate) fn split_message(text: &str, limit: usize) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let end = (start + limit).min(text.len());
-        if end == text.len() {
+        if text.len() - start <= limit {
             chunks.push(&text[start..]);
             break;
         }
-        let slice = &text[start..end];
-        let split_at = slice.rfind('\n').map(|i| start + i + 1).unwrap_or(end);
+        // Find the last char boundary at or before start + limit.
+        let mut end = start + limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Prefer splitting at a newline within the chunk.
+        let split_at = text[start..end]
+            .rfind('\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(end);
         chunks.push(&text[start..split_at]);
         start = split_at;
     }
@@ -389,9 +396,24 @@ impl EventHandler for Handler {
         inbox::notify_agent(
             &home,
             &instance_name,
-            &inbox::NotifySource::Telegram(username),
+            &inbox::NotifySource::Discord(username),
             &full_text,
         );
+
+        // Emit UxEvent::UserMsgReceived so the channel adapter can react.
+        {
+            use crate::channel::binding::BindingRef;
+            use crate::channel::event::MsgRef;
+            use crate::channel::ux_event::UxEvent;
+            let origin_msg = MsgRef {
+                binding: BindingRef::new("discord", Some(instance_name.clone()), ()),
+                id: msg.id.to_string(),
+            };
+            crate::channel::sink_registry::registry().emit(&UxEvent::UserMsgReceived {
+                origin_msg,
+                agent: instance_name,
+            });
+        }
     }
 
     async fn channel_delete(
@@ -754,6 +776,36 @@ impl crate::channel::Channel for DiscordChannel {
 mod tests {
     use super::*;
 
+    fn tmp_home(name: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "agend-discord-test-{}-{}-{}",
+            std::process::id(),
+            name,
+            id
+        ));
+        std::fs::create_dir_all(&dir).ok();
+        dir
+    }
+
+    fn test_discord_state(home: PathBuf) -> DiscordState {
+        DiscordState {
+            http: Arc::new(Http::new("fake-token")),
+            guild_id: GuildId::new(123456),
+            category_id: ChannelId::new(789),
+            channel_to_instance: HashMap::new(),
+            instance_to_channel: HashMap::new(),
+            home,
+            submit_keys: HashMap::new(),
+            user_allowlist: None,
+            registry: None,
+        }
+    }
+
+    // ── split_message ───────────────────────────────────────────────────
+
     #[test]
     fn split_message_short() {
         assert_eq!(split_message("hello", 2000), vec!["hello"]);
@@ -768,6 +820,35 @@ mod tests {
     }
 
     #[test]
+    fn split_message_empty() {
+        assert_eq!(split_message("", 2000), vec![""]);
+    }
+
+    #[test]
+    fn split_message_exact_limit() {
+        let text = "a".repeat(2000);
+        assert_eq!(split_message(&text, 2000), vec![text.as_str()]);
+    }
+
+    #[test]
+    fn split_message_no_newline_splits_at_limit() {
+        let text = "a".repeat(3000);
+        let chunks = split_message(&text, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 2000);
+    }
+
+    #[test]
+    fn split_message_prefers_newline_boundary() {
+        let text = format!("{}\n{}", "a".repeat(1000), "b".repeat(1500));
+        let chunks = split_message(&text, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].ends_with('\n'));
+    }
+
+    // ── parse_snowflake ─────────────────────────────────────────────────
+
+    #[test]
     fn parse_snowflake_valid() {
         assert_eq!(
             parse_snowflake("123456789012345678", "test").expect("valid"),
@@ -779,5 +860,134 @@ mod tests {
     fn parse_snowflake_invalid() {
         let err = parse_snowflake("not_a_number", "guild_id").expect_err("should fail");
         assert!(err.to_string().contains("guild_id"));
+    }
+
+    #[test]
+    fn parse_snowflake_zero() {
+        assert_eq!(parse_snowflake("0", "test").expect("valid"), 0);
+    }
+
+    // ── User allowlist ──────────────────────────────────────────────────
+
+    #[test]
+    fn allowlist_none_means_open() {
+        let state = test_discord_state(PathBuf::from("/tmp"));
+        assert!(state.is_user_allowed(1));
+        assert!(state.is_user_allowed(u64::MAX));
+    }
+
+    #[test]
+    fn allowlist_empty_rejects_all() {
+        let mut state = test_discord_state(PathBuf::from("/tmp"));
+        state.user_allowlist = Some(vec![]);
+        assert!(!state.is_user_allowed(1));
+    }
+
+    #[test]
+    fn allowlist_restricts_to_list() {
+        let mut state = test_discord_state(PathBuf::from("/tmp"));
+        state.user_allowlist = Some(vec![42, 100]);
+        assert!(state.is_user_allowed(42));
+        assert!(state.is_user_allowed(100));
+        assert!(!state.is_user_allowed(41));
+    }
+
+    // ── Channel registry (channels.json) ────────────────────────────────
+
+    #[test]
+    fn channel_registry_roundtrip() {
+        let home = tmp_home("registry_rt");
+        assert!(load_channel_registry(&home).is_empty());
+        register_channel(&home, 100, "alice");
+        register_channel(&home, 200, "bob");
+        let reg = load_channel_registry(&home);
+        assert_eq!(reg.get(&100), Some(&"alice".to_string()));
+        assert_eq!(reg.get(&200), Some(&"bob".to_string()));
+        unregister_channel(&home, 100);
+        let reg = load_channel_registry(&home);
+        assert!(!reg.contains_key(&100));
+        assert_eq!(reg.get(&200), Some(&"bob".to_string()));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn channel_registry_missing_file() {
+        let home = PathBuf::from("/tmp/agend-discord-nonexistent-12345");
+        assert!(load_channel_registry(&home).is_empty());
+    }
+
+    // ── DiscordChannel capabilities ─────────────────────────────────────
+
+    #[test]
+    fn discord_channel_caps() {
+        use crate::channel::{Channel, MarkdownDialect};
+        let state = Arc::new(Mutex::new(test_discord_state(PathBuf::from("/tmp"))));
+        let channel = DiscordChannel::new(state);
+        let caps = channel.caps();
+        assert!(caps.emits_deletion_events);
+        assert!(!caps.threads);
+        assert!(caps.attachments);
+        assert_eq!(caps.markdown, MarkdownDialect::None);
+        assert_eq!(caps.max_msg_bytes, 2000);
+        assert!(caps.react);
+        assert!(caps.edit);
+        assert!(!caps.typing_indicator);
+        assert!(caps.has_native_multi_thread_view.is_none());
+    }
+
+    #[test]
+    fn discord_channel_kind() {
+        use crate::channel::Channel;
+        let state = Arc::new(Mutex::new(test_discord_state(PathBuf::from("/tmp"))));
+        let channel = DiscordChannel::new(state);
+        assert_eq!(channel.kind(), "discord");
+    }
+
+    // ── Channel trait contract ──────────────────────────────────────────
+
+    fn discord_make_binding(name: &str) -> BindingRef {
+        let channel_id = 1_000_000 + name.bytes().map(|b| b as u64).sum::<u64>();
+        DiscordBindingPayload { channel_id }.into_binding()
+    }
+
+    #[test]
+    fn discord_channel_satisfies_contract() {
+        use crate::channel::contract::run_registry_contract;
+        let state = Arc::new(Mutex::new(test_discord_state(PathBuf::from("/tmp"))));
+        let channel = DiscordChannel::new(state);
+        run_registry_contract(channel, discord_make_binding);
+    }
+
+    // ── DiscordBindingPayload ───────────────────────────────────────────
+
+    #[test]
+    fn binding_payload_display_tag() {
+        let payload = DiscordBindingPayload { channel_id: 42 };
+        let binding = payload.into_binding();
+        assert_eq!(binding.kind(), "discord");
+        assert_eq!(binding.display_tag(), Some("DC#42"));
+    }
+
+    #[test]
+    fn split_message_multibyte_no_panic() {
+        // 3-byte CJK chars: splitting at byte 2000 could land mid-char
+        let text = "你好".repeat(1000); // 6000 bytes
+        let chunks = split_message(&text, 2000);
+        assert!(chunks.len() >= 3);
+        for chunk in &chunks {
+            assert!(chunk.len() <= 2000);
+            // Verify valid UTF-8 by iterating chars
+            let _: Vec<char> = chunk.chars().collect();
+        }
+    }
+
+    #[test]
+    fn split_message_emoji_boundary() {
+        let text = "🎉".repeat(600); // 2400 bytes (4 bytes each)
+        let chunks = split_message(&text, 2000);
+        assert!(chunks.len() >= 2);
+        for chunk in &chunks {
+            assert!(chunk.len() <= 2000);
+        }
     }
 }

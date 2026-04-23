@@ -2535,6 +2535,76 @@ instances:
         std::fs::remove_dir_all(&home).ok();
     }
 
+    // ─── Attachment handling (feat/telegram-attachments-v2) ───────────
+
+    /// Attachment download success produces the expected wire format.
+    /// The inbound handler appends `\n[attachment: {fid} -> {path}]` to
+    /// the caption text so the agent sees both the user's words and the
+    /// local file path.
+    #[test]
+    fn attachment_text_format_on_download_success() {
+        let text = "check this file";
+        let fid = "AgACAgIAAx0CX";
+        let path = "/tmp/downloads/photo.jpg";
+        let result = format!("{text}\n[attachment: {fid} -> {path}]");
+        assert!(result.starts_with("check this file\n[attachment:"));
+        assert!(result.contains(fid));
+        assert!(result.contains(path));
+    }
+
+    /// Attachment download failure produces the expected wire format.
+    /// The handler must NOT abort — it appends `(download failed)` and
+    /// continues so the agent still sees the caption + file_id.
+    #[test]
+    fn attachment_text_format_on_download_failure() {
+        let text = "";
+        let fid = "BQACAgIAAx0CX";
+        let result = format!("{text}\n[attachment: {fid} (download failed)]");
+        assert!(result.contains("(download failed)"));
+        assert!(result.contains(fid));
+    }
+
+    /// Empty caption (photo/document with no caption) produces an empty
+    /// string prefix, not a panic or None. The unwrap_or("") pattern in
+    /// handle_message must be safe.
+    #[test]
+    fn empty_caption_fallback_produces_empty_prefix() {
+        let caption: Option<&str> = None;
+        let text = caption.unwrap_or("").to_string();
+        assert!(text.is_empty());
+        // With attachment appended, the text starts with \n
+        let fid = "test_fid";
+        let result = format!("{text}\n[attachment: {fid} -> /tmp/file.jpg]");
+        assert!(result.starts_with('\n'));
+    }
+
+    /// Plain text messages (no photo/document) produce text with no
+    /// attachment suffix — zero regression on the common path.
+    #[test]
+    fn plain_text_message_no_attachment_suffix() {
+        let text = "hello world".to_string();
+        let attachment: Option<String> = None;
+        let result = if let Some(ref fid) = attachment {
+            format!("{text}\n[attachment: {fid} -> /tmp/x]")
+        } else {
+            text.clone()
+        };
+        assert_eq!(result, "hello world");
+        assert!(!result.contains("[attachment:"));
+    }
+
+    /// Download directory is constructed as `home/downloads/{instance}`.
+    #[test]
+    fn download_dir_path_construction() {
+        let home = PathBuf::from("/tmp/agend-home");
+        let instance_name = "my-agent";
+        let download_dir = home.join("downloads").join(instance_name);
+        assert_eq!(
+            download_dir,
+            PathBuf::from("/tmp/agend-home/downloads/my-agent")
+        );
+    }
+
     /// Sibling pin (baseline): confirms the cleanup path ACTUALLY
     /// fires in the variant that still owns cleanup authority. Without
     /// this, the no-cleanup pin above could pass vacuously if

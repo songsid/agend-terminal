@@ -738,6 +738,8 @@ instances:
                 assert_eq!(mode, "topic");
             }
             None => panic!("channel should be Some"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
 
         fs::remove_dir_all(&dir).ok();
@@ -773,6 +775,8 @@ instances: {}
                 assert_eq!(group_id, -100999);
             }
             None => panic!("plural channels: should populate singular channel field"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         // Plural is still preserved on the struct for later consumers.
         assert!(config.channels.is_some());
@@ -818,6 +822,8 @@ instances: {}
                 );
             }
             None => panic!("channel should be populated"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         fs::remove_dir_all(&dir).ok();
     }
@@ -850,6 +856,8 @@ instances: {}
                 ref bot_token_env, ..
             }) => assert_eq!(bot_token_env, "SINGULAR_TOKEN"),
             None => panic!("singular channel field must be preserved"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
         fs::remove_dir_all(&dir).ok();
     }
@@ -892,6 +900,8 @@ instances: {}
                 assert_eq!(mode, "topic", "default mode should be 'topic'");
             }
             None => panic!("channel should be Some"),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected Telegram channel config"),
         }
 
         fs::remove_dir_all(&dir).ok();

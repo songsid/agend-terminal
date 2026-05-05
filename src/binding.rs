@@ -8,18 +8,33 @@ use std::path::Path;
 
 /// Write a binding for an agent (task assigned).
 pub fn bind(home: &Path, agent: &str, task_id: &str, branch: &str) {
+    bind_full(home, agent, task_id, branch, std::path::Path::new(""));
+}
+
+/// Write a full binding including worktree path (Phase 3).
+pub fn bind_full(
+    home: &Path,
+    agent: &str,
+    task_id: &str,
+    branch: &str,
+    worktree: &std::path::Path,
+) {
     let dir = home.join("runtime").join(agent);
     std::fs::create_dir_all(&dir).ok();
     let path = dir.join("binding.json");
     let lock_path = dir.join(".binding.json.lock");
     let _lock = crate::store::acquire_file_lock(&lock_path);
-    let binding = json!({
+    let wt_str = worktree.display().to_string();
+    let mut binding = json!({
         "version": 1,
         "agent": agent,
         "task_id": task_id,
         "branch": branch,
         "issued_at": chrono::Utc::now().to_rfc3339(),
     });
+    if !wt_str.is_empty() {
+        binding["worktree"] = json!(wt_str);
+    }
     let body = serde_json::to_string_pretty(&binding).unwrap_or_default();
     let _ = crate::store::atomic_write(&path, body.as_bytes());
 }
@@ -41,19 +56,25 @@ pub fn read(home: &Path, agent: &str) -> Option<serde_json::Value> {
 
 /// Install the prepare-commit-msg hook into a worktree via core.hooksPath.
 /// Points to `$AGEND_HOME/hooks/` unified directory.
+/// Installs bash hook on Unix, PowerShell hook on Windows.
 pub fn install_hooks(home: &Path, worktree: &Path) {
     let hooks_dir = home.join("hooks");
     std::fs::create_dir_all(&hooks_dir).ok();
 
-    // Extract embedded hook script.
-    let hook_content = include_str!("../assets/hooks/prepare-commit-msg");
-    let hook_path = hooks_dir.join("prepare-commit-msg");
-    let _ = std::fs::write(&hook_path, hook_content);
+    // Extract embedded hook scripts (both platforms for portability).
+    let bash_hook = include_str!("../assets/hooks/prepare-commit-msg");
+    let bash_path = hooks_dir.join("prepare-commit-msg");
+    let _ = std::fs::write(&bash_path, bash_hook);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(&bash_path, std::fs::Permissions::from_mode(0o755));
     }
+
+    // Windows: also install PowerShell version.
+    let ps_hook = include_str!("../assets/hooks/prepare-commit-msg.ps1");
+    let ps_path = hooks_dir.join("prepare-commit-msg.ps1");
+    let _ = std::fs::write(&ps_path, ps_hook);
 
     // Set core.hooksPath on the worktree.
     let _ = std::process::Command::new("git")
@@ -90,11 +111,17 @@ pub fn reconcile_hooks(home: &Path) {
 pub fn symlink_shim(home: &Path) {
     let bin_dir = home.join("bin");
     std::fs::create_dir_all(&bin_dir).ok();
-    let link_path = bin_dir.join("git");
+    let link_name = if cfg!(windows) { "git.exe" } else { "git" };
+    let link_path = bin_dir.join(link_name);
 
     // Find the agend-git binary alongside the main binary.
+    let shim_name = if cfg!(windows) {
+        "agend-git.exe"
+    } else {
+        "agend-git"
+    };
     let shim_src = std::env::current_exe().ok().and_then(|exe| {
-        let candidate = exe.with_file_name("agend-git");
+        let candidate = exe.with_file_name(shim_name);
         candidate.exists().then_some(candidate)
     });
 

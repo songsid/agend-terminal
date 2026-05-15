@@ -75,14 +75,8 @@ pub fn run(home: &Path) -> anyhow::Result<()> {
             println!("\n  Add the bot to your Telegram group and send a message.\n");
             print!("  Waiting for group message (3 min timeout)... ");
             io::stdout().flush().ok();
-            match detect_group(&tok) {
-                Ok(result) => {
-                    println!("✓ {} ({})\n", result.group_title, result.group_id);
-                    let user_id = if let Some((uid, name)) = result.user {
-                        confirm_user_allowlist(uid, &name)?
-                    } else {
-                        None
-                    };
+            match detect_and_confirm_user(&tok) {
+                Ok((result, user_id)) => {
                     (tok, Some(result.group_id), user_id)
                 }
                 Err(e) => {
@@ -158,14 +152,8 @@ fn telegram_setup(_home: &Path) -> anyhow::Result<(String, Option<i64>, Option<i
     print!("  Waiting for group message (3 min timeout)... ");
     io::stdout().flush().ok();
 
-    match detect_group(&token) {
-        Ok(result) => {
-            println!("✓ {} ({})\n", result.group_title, result.group_id);
-            let user_id = if let Some((uid, name)) = result.user {
-                confirm_user_allowlist(uid, &name)?
-            } else {
-                None
-            };
+    match detect_and_confirm_user(&token) {
+        Ok((result, user_id)) => {
             Ok((token, Some(result.group_id), user_id))
         }
         Err(e) => {
@@ -256,19 +244,25 @@ fn detect_group(token: &str) -> anyhow::Result<DetectGroupResult> {
     })
 }
 
-/// Prompt user to confirm adding detected user to allowlist.
-/// Returns Some((user_id, name)) if confirmed, None if skipped.
-fn confirm_user_allowlist(user_id: i64, name: &str) -> anyhow::Result<Option<i64>> {
-    let answer = prompt(&format!(
-        "  Add {name} (ID: {user_id}) to allowlist? (Y/n/skip): "
-    ))?;
-    let trimmed = answer.trim().to_lowercase();
-    if trimmed.is_empty() || trimmed == "y" {
-        Ok(Some(user_id))
-    } else if trimmed == "skip" {
-        Ok(None)
-    } else {
-        Ok(None) // 'n' — caller should continue polling
+/// Detect group and confirm user in a loop. Re-polls on "n".
+fn detect_and_confirm_user(token: &str) -> anyhow::Result<(DetectGroupResult, Option<i64>)> {
+    loop {
+        let result = detect_group(token)?;
+        println!("✓ {} ({})", result.group_title, result.group_id);
+        if let Some((uid, ref name)) = result.user {
+            let answer = prompt(&format!("  Add {name} (ID: {uid}) to allowlist? (Y/n/skip): "))?;
+            let trimmed = answer.trim().to_lowercase();
+            if trimmed.is_empty() || trimmed == "y" {
+                return Ok((result, Some(uid)));
+            } else if trimmed == "skip" {
+                return Ok((result, None));
+            }
+            // "n" → continue loop, re-poll
+            print!("  Waiting for another message... ");
+            io::stdout().flush().ok();
+            continue;
+        }
+        return Ok((result, None));
     }
 }
 
@@ -291,7 +285,7 @@ fn configure_fleet_params(backend: &Backend) -> anyhow::Result<FleetParams> {
     };
 
     let count_input = prompt("  Number of agents [1]: ")?;
-    let instance_count = count_input.trim().parse::<usize>().unwrap_or(1).max(1);
+    let instance_count = count_input.trim().parse::<usize>().unwrap_or(1).max(1).min(5);
 
     // All backends support --model
     let model_input = prompt(&format!("  Model for {} (Enter to skip): ", backend.name()))?;
